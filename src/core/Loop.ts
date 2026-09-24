@@ -1,12 +1,11 @@
 export const FIXED_DT = 1 / 60;
 
-/** Physics/animation tick. Always receives the same dt. */
-export interface FixedUpdatable {
+export interface Frame {
+  /** Runs once per rendered frame, even while paused. Never blocks input. */
+  sample(): void;
+  /** Runs a whole number of times per frame with a constant dt. */
   fixedUpdate(dt: number): void;
-}
-
-/** Visual tick. Receives alpha in [0,1) so meshes can interpolate between ticks. */
-export interface RenderUpdatable {
+  /** Runs once per rendered frame with the leftover fraction between ticks. */
   renderUpdate(alpha: number, dt: number): void;
 }
 
@@ -21,11 +20,7 @@ export class Loop {
   private rafId = 0;
   private paused = false;
 
-  constructor(
-    private readonly fixed: FixedUpdatable,
-    private readonly variable: RenderUpdatable,
-    private readonly onFrameStats: (dt: number) => void,
-  ) {}
+  constructor(private readonly frame: Frame) {}
 
   start(): void {
     if (this.running) return;
@@ -41,9 +36,10 @@ export class Loop {
   }
 
   setPaused(paused: boolean): void {
+    if (this.paused === paused) return;
     this.paused = paused;
     // Drop the accumulated time so unpausing does not fast-forward the world.
-    if (paused) this.accumulator = 0;
+    this.accumulator = 0;
   }
 
   get isPaused(): boolean {
@@ -57,19 +53,17 @@ export class Loop {
     const frameDt = Math.min((now - this.lastTime) / 1000, 0.2);
     this.lastTime = now;
 
-    if (this.paused) {
-      this.variable.renderUpdate(0, frameDt);
-      this.onFrameStats(frameDt);
-      return;
+    // Sampled every frame so the pause button keeps working while paused.
+    this.frame.sample();
+
+    if (!this.paused) {
+      this.accumulator += frameDt;
+      while (this.accumulator >= FIXED_DT) {
+        this.frame.fixedUpdate(FIXED_DT);
+        this.accumulator -= FIXED_DT;
+      }
     }
 
-    this.accumulator += frameDt;
-    while (this.accumulator >= FIXED_DT) {
-      this.fixed.fixedUpdate(FIXED_DT);
-      this.accumulator -= FIXED_DT;
-    }
-
-    this.variable.renderUpdate(this.accumulator / FIXED_DT, frameDt);
-    this.onFrameStats(frameDt);
+    this.frame.renderUpdate(this.paused ? 1 : this.accumulator / FIXED_DT, frameDt);
   };
 }

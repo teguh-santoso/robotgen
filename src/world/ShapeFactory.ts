@@ -172,6 +172,11 @@ export class ShapeFactory {
   }
 
   fixedCylinder(options: CylinderOptions): Mesh {
+    return this.fixedCylinderPair(options).mesh;
+  }
+
+  /** Same as {@link fixedCylinder} but also hands back the body, for joints. */
+  fixedCylinderPair(options: CylinderOptions): { mesh: Mesh; body: RigidBody } {
     const segments = options.segments ?? 16;
     const mesh = this.prepare(
       new Mesh(
@@ -186,7 +191,7 @@ export class ShapeFactory {
       this.R.ColliderDesc.cylinder(options.height / 2, options.radius).setFriction(0.9),
       body,
     );
-    return mesh;
+    return { mesh, body };
   }
 
   /**
