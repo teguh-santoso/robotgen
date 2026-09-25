@@ -94,7 +94,10 @@ export class Stars {
 
     for (const anchor of anchors) {
       const mesh = new Mesh(this.geometry, this.material);
-      mesh.castShadow = true;
+      // Floating and emissive: a shadow would cost shadow-pass draws and read
+      // as a smudge on the ground.
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
       const glow = new Sprite(
         new SpriteMaterial({
           map: this.glowMap,

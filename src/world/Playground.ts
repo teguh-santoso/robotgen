@@ -6,7 +6,6 @@ import {
   Group,
   InstancedMesh,
   Matrix4,
-  Mesh,
   MeshStandardMaterial,
   Quaternion,
   RepeatWrapping,
@@ -14,11 +13,12 @@ import {
   SphereGeometry,
   Vector3,
 } from 'three';
-import type { Scene, Texture } from 'three';
+import type { Mesh, Scene, Texture } from 'three';
 import { PLAYGROUND } from '../core/Config';
 import type { ShapeFactory } from './ShapeFactory';
 
 const GRASS = 0x8ed177;
+const ROCK = 0xc9b8a8;
 const FENCE_COLORS = [0xff8fa3, 0xffd166, 0x8fd3ff, 0xb39ddb, 0x9be6a5];
 const DEFAULT_UP = new Vector3(0, 1, 0);
 
@@ -44,10 +44,21 @@ function makeGrassTexture(): Texture {
   return texture;
 }
 
+/** Meshes that never move get their matrix composed once instead of every frame. */
+function freeze<T extends Mesh>(mesh: T): T {
+  mesh.matrixAutoUpdate = false;
+  mesh.updateMatrix();
+  return mesh;
+}
+
 /**
  * A friendly, fully bounded park. Every surface is gentle enough that the robot
  * never gets stuck, and the floor is flat so a child can just hold the stick
  * forward and stay safe.
+ *
+ * Everything static is handed to the factory as an instanced batch rather than
+ * as individual meshes: the park used to cost ~89 draw calls, and on the weak
+ * integrated GPUs this game targets, draw submission is real CPU time.
  */
 export class Playground {
   readonly group = new Group();
@@ -72,6 +83,7 @@ export class Playground {
     this.buildRocks();
     this.buildTrees();
     this.buildFlowers();
+    for (const mesh of this.factory.flushInstances()) this.group.add(freeze(mesh));
     this.defineStarAnchors();
   }
 
@@ -86,7 +98,7 @@ export class Playground {
       roughness: 0.95,
     });
     (mesh.material as MeshStandardMaterial).map = this.grassTexture;
-    this.group.add(mesh);
+    this.group.add(freeze(mesh));
   }
 
   // --- boundary fence ----------------------------------------------------
@@ -101,23 +113,17 @@ export class Playground {
       const nextAngle = ((i + 1) / segments) * Math.PI * 2;
       const midAngle = (angle + nextAngle) / 2;
 
-      this.group.add(
-        this.factory.fixedBox({
-          size: [chord + 0.12, 1.1, 0.5],
-          position: [Math.cos(midAngle) * radius, 0.55, Math.sin(midAngle) * radius],
-          euler: [0, -midAngle + Math.PI / 2, 0],
-          color: FENCE_COLORS[i % FENCE_COLORS.length],
-          roughness: 0.8,
-        }),
+      this.factory.staticBox(
+        [chord + 0.12, 1.1, 0.5],
+        [Math.cos(midAngle) * radius, 0.55, Math.sin(midAngle) * radius],
+        FENCE_COLORS[i % FENCE_COLORS.length],
+        [0, -midAngle + Math.PI / 2, 0],
       );
-      this.group.add(
-        this.factory.fixedCylinder({
-          radius: 0.34,
-          height: 1.5,
-          position: [Math.cos(angle) * radius, 0.75, Math.sin(angle) * radius],
-          color: FENCE_COLORS[(i + 2) % FENCE_COLORS.length],
-          roughness: 0.6,
-        }),
+      this.factory.staticCylinder(
+        0.34,
+        1.5,
+        [Math.cos(angle) * radius, 0.75, Math.sin(angle) * radius],
+        FENCE_COLORS[(i + 2) % FENCE_COLORS.length],
       );
     }
   }
@@ -131,26 +137,16 @@ export class Playground {
     const rise = 1.4;
     const run = 6;
 
-    this.group.add(
-      this.factory.fixedBox({
-        size: [12, top, 12],
-        position: [x, top / 2, z],
-        color: 0xe9c46a,
-        roughness: 0.7,
-      }),
-    );
+    this.factory.staticBox([12, top, 12], [x, top / 2, z], 0xe9c46a);
 
     // A gentle ~13 degree ramp up to the deck. Deck's +z face sits at z + 6.
     const length = Math.hypot(run, rise);
     const angle = -Math.atan2(rise, run);
-    this.group.add(
-      this.factory.fixedBox({
-        size: [4, 0.4, length],
-        position: [x, rise / 2, z + 6 + run / 2],
-        euler: [angle, 0, 0],
-        color: 0xffb703,
-        roughness: 0.7,
-      }),
+    this.factory.staticBox(
+      [4, 0.4, length],
+      [x, rise / 2, z + 6 + run / 2],
+      0xffb703,
+      [angle, 0, 0],
     );
 
     for (const [dx, dz] of [
@@ -159,15 +155,7 @@ export class Playground {
       [-5.4, 5.4],
       [5.4, 5.4],
     ]) {
-      this.group.add(
-        this.factory.fixedCylinder({
-          radius: 0.16,
-          height: 2.2,
-          position: [x + dx, top + 1.1, z + dz],
-          color: 0xfff3d6,
-          roughness: 0.5,
-        }),
-      );
+      this.factory.staticCylinder(0.16, 2.2, [x + dx, top + 1.1, z + dz], 0xfff3d6);
     }
   }
 
@@ -176,25 +164,15 @@ export class Playground {
     const z = -6;
     const top = 1.2;
 
-    this.group.add(
-      this.factory.fixedBox({
-        size: [8, top, 8],
-        position: [x, top / 2, z],
-        color: 0xa0e0c0,
-        roughness: 0.7,
-      }),
-    );
+    this.factory.staticBox([8, top, 8], [x, top / 2, z], 0xa0e0c0);
 
     // Four 0.3 m steps: comfortably under the 0.35 m autostep limit.
     for (let i = 0; i < 4; i += 1) {
       const height = top - 0.3 * i;
-      this.group.add(
-        this.factory.fixedBox({
-          size: [0.4, height, 3.2],
-          position: [x + 4.2 + 0.4 * i, height / 2, z],
-          color: 0x8fd3ff,
-          roughness: 0.7,
-        }),
+      this.factory.staticBox(
+        [0.4, height, 3.2],
+        [x + 4.2 + 0.4 * i, height / 2, z],
+        0x8fd3ff,
       );
     }
   }
@@ -204,25 +182,15 @@ export class Playground {
     const z = 12;
     const top = 2.4;
 
-    this.group.add(
-      this.factory.fixedBox({
-        size: [5, top, 5],
-        position: [x, top / 2, z],
-        color: 0xffc6de,
-        roughness: 0.7,
-      }),
-    );
+    this.factory.staticBox([5, top, 5], [x, top / 2, z], 0xffc6de);
 
     // Eight 0.3 m steps climbing to the tower.
     for (let i = 0; i < 8; i += 1) {
       const height = top - 0.3 * i;
-      this.group.add(
-        this.factory.fixedBox({
-          size: [0.4, height, 2.4],
-          position: [x - 2.7 - 0.4 * i, height / 2, z],
-          color: 0xffe08a,
-          roughness: 0.7,
-        }),
+      this.factory.staticBox(
+        [0.4, height, 2.4],
+        [x - 2.7 - 0.4 * i, height / 2, z],
+        0xffe08a,
       );
     }
 
@@ -231,14 +199,11 @@ export class Playground {
     const length = 5.6;
     const slideRun = Math.sqrt(length * length - drop * drop);
     const highZ = z + 2.5 + 0.7;
-    this.group.add(
-      this.factory.fixedBox({
-        size: [2.2, 0.3, length],
-        position: [x, 0.15 + drop / 2, highZ + slideRun / 2],
-        euler: [-Math.atan2(drop, slideRun), 0, 0],
-        color: 0xff9f68,
-        roughness: 0.3,
-      }),
+    this.factory.staticBox(
+      [2.2, 0.3, length],
+      [x, 0.15 + drop / 2, highZ + slideRun / 2],
+      0xff9f68,
+      [-Math.atan2(drop, slideRun), 0, 0],
     );
   }
 
@@ -250,24 +215,9 @@ export class Playground {
     ];
     for (const [x, z, color] of gates) {
       for (const dx of [-1.6, 1.6]) {
-        this.group.add(
-          this.factory.fixedCylinder({
-            radius: 0.22,
-            height: 3.4,
-            position: [x + dx, 1.7, z],
-            color,
-            roughness: 0.5,
-          }),
-        );
+        this.factory.staticCylinder(0.22, 3.4, [x + dx, 1.7, z], color);
       }
-      this.group.add(
-        this.factory.fixedBox({
-          size: [4.1, 0.45, 0.45],
-          position: [x, 3.6, z],
-          color,
-          roughness: 0.5,
-        }),
-      );
+      this.factory.staticBox([4.1, 0.45, 0.45], [x, 3.6, z], color);
     }
   }
 
@@ -281,20 +231,7 @@ export class Playground {
       [-14, 24, 0.9],
     ];
     for (const [x, z, radius] of rocks) {
-      const geometry = new SphereGeometry(radius, 14, 10);
-      const material = new MeshStandardMaterial({
-        color: 0xc9b8a8,
-        roughness: 0.95,
-        metalness: 0,
-      });
-      const rock = new Mesh(geometry, material);
-      rock.position.set(x, radius * 0.55, z);
-      rock.scale.y = 0.65;
-      rock.castShadow = true;
-      rock.receiveShadow = true;
-      this.group.add(rock);
-      this.disposables.push(geometry, material);
-      this.factory.staticCollider('ball', [radius * 0.85, 0, 0], [x, radius * 0.5, z]);
+      this.factory.staticBall(radius, [x, radius * 0.45, z], ROCK);
     }
   }
 
@@ -346,7 +283,7 @@ export class Playground {
     trunks.instanceMatrix.needsUpdate = true;
     leaves.instanceMatrix.needsUpdate = true;
     if (leaves.instanceColor) leaves.instanceColor.needsUpdate = true;
-    this.group.add(trunks, leaves);
+    this.group.add(freeze(trunks), freeze(leaves));
   }
 
   private tooCloseToLandmark(x: number, z: number): boolean {
@@ -390,7 +327,7 @@ export class Playground {
     heads.instanceMatrix.needsUpdate = true;
     stems.instanceMatrix.needsUpdate = true;
     if (heads.instanceColor) heads.instanceColor.needsUpdate = true;
-    this.group.add(heads, stems);
+    this.group.add(freeze(heads), freeze(stems));
   }
 
   private defineStarAnchors(): void {

@@ -1,26 +1,33 @@
-import { DEBUG } from '../core/Config';
-import { canFullscreen, el, iconButton, markUi, toggleFullscreen } from './dom';
+import { el, iconButton, markUi, canFullscreen, toggleFullscreen } from './dom';
 
 export interface HudCallbacks {
   onPause: () => void;
   onToggleSound: () => boolean;
 }
 
+export interface HudStats {
+  fps: number;
+  ms: number;
+  calls: number;
+  triangles: number;
+  tier: string;
+}
+
 /**
  * Deliberately sparse: one big star counter, three round buttons. No text a
- * child has to read to keep playing.
+ * child has to read to keep playing. The stats line is for the grown-up who has
+ * to make it run on an old laptop.
  */
 export class Hud {
   private readonly starPill: HTMLDivElement;
   private readonly starCount: HTMLSpanElement;
   private readonly deviceLabel: HTMLDivElement;
-  private readonly fpsLabel: HTMLDivElement;
+  private readonly statsLabel: HTMLDivElement;
   private readonly hint: HTMLDivElement;
   private readonly soundButton: HTMLButtonElement;
   private hintTimer = 0;
-  private lastFps = 0;
-  private fpsTimer = 0;
   private lastDevice = '';
+  private lastStats = '';
 
   constructor(root: HTMLElement, callbacks: HudCallbacks) {
     const top = markUi(el('div', 'hud-top'));
@@ -48,10 +55,10 @@ export class Hud {
     top.append(this.starPill, buttons);
 
     this.hint = el('div', 'hud-hint');
-    this.fpsLabel = el('div', 'hud-fps');
-    this.fpsLabel.style.display = DEBUG ? '' : 'none';
+    this.statsLabel = el('div', 'hud-stats');
+    this.statsLabel.style.display = 'none';
 
-    root.append(top, this.hint, this.fpsLabel);
+    root.append(top, this.hint, this.statsLabel);
   }
 
   setStars(collected: number, total: number): void {
@@ -79,6 +86,19 @@ export class Hud {
     this.soundButton.classList.toggle('toggle-off', muted);
   }
 
+  setStatsVisible(visible: boolean): void {
+    this.statsLabel.style.display = visible ? '' : 'none';
+  }
+
+  setStats(stats: HudStats): void {
+    const text =
+      `${stats.fps.toFixed(0)} fps \u00B7 ${stats.ms.toFixed(1)} ms \u00B7 ` +
+      `${stats.calls} draw \u00B7 ${(stats.triangles / 1000).toFixed(1)}k tri \u00B7 ${stats.tier}`;
+    if (text === this.lastStats) return;
+    this.lastStats = text;
+    this.statsLabel.textContent = text;
+  }
+
   showHint(text: string, seconds: number): void {
     this.hint.textContent = text;
     this.hint.classList.add('visible');
@@ -90,16 +110,9 @@ export class Hud {
     this.hintTimer = 0;
   }
 
-  update(dt: number, fps: number): void {
-    if (this.hintTimer > 0) {
-      this.hintTimer -= dt;
-      if (this.hintTimer <= 0) this.hint.classList.remove('visible');
-    }
-    if (!DEBUG) return;
-    this.fpsTimer += dt;
-    if (this.fpsTimer < 0.4) return;
-    this.lastFps = fps;
-    this.fpsTimer = 0;
-    this.fpsLabel.textContent = `${this.lastFps.toFixed(0)} fps`;
+  update(dt: number): void {
+    if (this.hintTimer <= 0) return;
+    this.hintTimer -= dt;
+    if (this.hintTimer <= 0) this.hint.classList.remove('visible');
   }
 }

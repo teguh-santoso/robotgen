@@ -202,8 +202,13 @@ export class RobotRig {
   ): Mesh {
     const mesh = new Mesh(geometry, material);
     mesh.position.set(x, y, z);
+    // A part never moves relative to its joint, so its local matrix is composed
+    // once instead of on every frame.
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
+    // Casting grounds the robot; receiving would only ever self-shadow it.
     mesh.castShadow = true;
-    mesh.receiveShadow = true;
+    mesh.receiveShadow = false;
     return mesh;
   }
 

@@ -1,5 +1,13 @@
 import { Scene } from 'three';
 import { DEBUG } from './Config';
+import {
+  TIER_SETTINGS,
+  detectTier,
+  loadQualityMode,
+  loadStatsVisible,
+  saveStatsVisible,
+} from './DeviceProfile';
+import type { QualityMode } from './DeviceProfile';
 import { Loop } from './Loop';
 import type { Frame } from './Loop';
 import { Quality } from './Quality';
@@ -22,6 +30,7 @@ import { GamepadDevice } from '../input/GamepadDevice';
 import { TouchDevice } from '../input/TouchDevice';
 import { Sfx } from '../audio/Sfx';
 import { Hud } from '../ui/Hud';
+import type { HudStats } from '../ui/Hud';
 import { PauseOverlay } from '../ui/PauseOverlay';
 import { CompleteOverlay } from '../ui/CompleteOverlay';
 import { el } from '../ui/dom';
@@ -39,6 +48,7 @@ type Phase = 'playing' | 'celebrating' | 'complete';
 
 const FADE_SECONDS = 0.36;
 const CELEBRATION_SECONDS = 4.6;
+const QUALITY_CYCLE: QualityMode[] = ['auto', 'minimal', 'low', 'medium', 'high'];
 
 /**
  * Owns the world and drives the frame. Loading Rapier is deferred until the
@@ -84,19 +94,37 @@ export class Game implements Frame {
   private fadeTimer = 0;
   private gamepadWasConnected = false;
   private smokeTestDone = false;
-  private frameDt = 1 / 60;
+  private smoothedMs = 16.7;
+  private statsVisible = false;
   private disposeDebug: (() => void) | null = null;
 
-  private constructor(
-    R: RapierModule,
-    options: GameOptions,
-  ) {
+  private constructor(R: RapierModule, options: GameOptions) {
     this.sfx = options.sfx;
     this.startScreen = options.startScreen;
 
-    this.renderer = new Renderer(options.canvas);
-    this.quality = new Quality(this.renderer);
-    this.environment = new Environment(this.scene, this.renderer.renderer);
+    // Antialiasing and the shadow filter are fixed for the life of the WebGL
+    // context, so they have to come from the tier we start on. Everything else
+    // is adjustable later by the auto-tuner.
+    const detected = detectTier();
+    const mode = loadQualityMode();
+    const initial = TIER_SETTINGS[mode === 'auto' ? detected : mode];
+
+    this.renderer = new Renderer(options.canvas, {
+      antialias: initial.antialias,
+      pcfSoft: initial.pcfSoft,
+      pixelRatio: initial.pixelRatio,
+    });
+    this.quality = new Quality(this.renderer, detected, mode);
+    this.environment = new Environment(
+      this.scene,
+      this.renderer.renderer,
+      initial.shadowExtent,
+      initial.shadowMapSize,
+    );
+    this.quality.onChange((settings) => {
+      this.environment.setShadowExtent(settings.shadowExtent);
+      this.environment.setShadowMapSize(settings.shadowMapSize);
+    });
 
     this.physics = new PhysicsWorld(R);
     this.factory = new ShapeFactory(this.physics, R);
@@ -141,6 +169,8 @@ export class Game implements Frame {
         this.gamepad.rumbleEnabled = !this.gamepad.rumbleEnabled;
         return this.gamepad.rumbleEnabled;
       },
+      onCycleQuality: () => this.cycleQuality(),
+      onToggleStats: () => this.setStatsVisible(!this.statsVisible),
     });
     this.completeOverlay = new CompleteOverlay(options.uiRoot, () => this.restart());
 
@@ -153,6 +183,8 @@ export class Game implements Frame {
     this.wireGameplay();
     this.hud.setStars(0, this.stars.total);
     this.completeOverlay.setStars(0, this.stars.total);
+    this.pauseOverlay.syncQuality(this.qualityLabel());
+    this.setStatsVisible(loadStatsVisible());
     this.resize();
 
     window.addEventListener('resize', this.resize);
@@ -175,11 +207,35 @@ export class Game implements Frame {
     this.robot.onLand = () => this.sfx.land();
   }
 
+  // --- settings ----------------------------------------------------------
+
+  private qualityLabel(): string {
+    if (this.quality.currentMode === 'auto') {
+      return `Otomatis (${this.quality.settings.label})`;
+    }
+    return this.quality.settings.label;
+  }
+
+  private cycleQuality(): string {
+    const index = QUALITY_CYCLE.indexOf(this.quality.currentMode);
+    this.quality.setMode(QUALITY_CYCLE[(index + 1) % QUALITY_CYCLE.length]);
+    return this.qualityLabel();
+  }
+
+  private setStatsVisible(visible: boolean): boolean {
+    this.statsVisible = visible;
+    saveStatsVisible(visible);
+    this.hud.setStatsVisible(visible);
+    this.pauseOverlay.syncStats(visible);
+    return visible;
+  }
+
   // --- lifecycle ---------------------------------------------------------
 
   async play(): Promise<void> {
     this.startScreen.hide();
     this.hud.showHint('Ayo kumpulkan semua bintang!', 4);
+    this.prewarmShaders();
     if (DEBUG) {
       const { createDebugPanel } = await import('../ui/DebugPanel');
       const panel = await createDebugPanel({
@@ -191,6 +247,22 @@ export class Game implements Frame {
       this.disposeDebug = panel.destroy;
     }
     this.loop.start();
+  }
+
+  /**
+   * Compiles both shadow variants up front, while the loading screen is still
+   * up. Without this, the first quality change mid-game would freeze for a
+   * moment while the shaders compile.
+   */
+  private prewarmShaders(): void {
+    const gl = this.renderer.renderer;
+    const wasEnabled = gl.shadowMap.enabled;
+    gl.shadowMap.enabled = true;
+    this.renderer.compile(this.scene, this.camera.camera);
+    gl.shadowMap.enabled = false;
+    this.renderer.compile(this.scene, this.camera.camera);
+    gl.shadowMap.enabled = wasEnabled;
+    gl.shadowMap.needsUpdate = true;
   }
 
   dispose(): void {
@@ -257,7 +329,6 @@ export class Game implements Frame {
   }
 
   renderUpdate(alpha: number, dt: number): void {
-    this.frameDt = dt;
     this.celebration.update(dt);
 
     this.robot.renderUpdate(alpha, dt);
@@ -273,9 +344,12 @@ export class Game implements Frame {
       this.robot.body.body,
     );
 
+    // The shadow camera is small and follows the robot, so it has to be moved
+    // before the shadow map is rendered.
+    this.environment.followTarget(this.robot.body.position);
+
     if (this.physicsDebug?.lines.visible) this.physicsDebug.update();
     this.quality.update(dt);
-    this.hud.update(dt, 1 / Math.max(dt, 1e-4));
 
     if (this.phase === 'celebrating') {
       this.celebrationTimer -= dt;
@@ -283,6 +357,22 @@ export class Game implements Frame {
     }
 
     this.renderer.renderer.render(this.scene, this.camera.camera);
+    this.hud.update(dt);
+    this.updateStats(dt);
+  }
+
+  private updateStats(dt: number): void {
+    this.smoothedMs += (dt * 1000 - this.smoothedMs) * 0.1;
+    if (!this.statsVisible) return;
+    const info = this.renderer.renderer.info.render;
+    const stats: HudStats = {
+      ms: this.smoothedMs,
+      fps: 1000 / Math.max(this.smoothedMs, 0.01),
+      calls: info.calls,
+      triangles: info.triangles,
+      tier: this.qualityLabel(),
+    };
+    this.hud.setStats(stats);
   }
 
   private resize = (): void => {
@@ -304,7 +394,10 @@ export class Game implements Frame {
   private setPaused(paused: boolean): void {
     if (paused && this.phase !== 'playing') return;
     this.pauseOverlay.hide();
-    if (paused) this.pauseOverlay.show();
+    if (paused) {
+      this.pauseOverlay.syncQuality(this.qualityLabel());
+      this.pauseOverlay.show();
+    }
     this.loop.setPaused(paused);
   }
 
@@ -382,7 +475,7 @@ export class Game implements Frame {
       colliders: this.physics.world.colliders.len(),
       bodies: this.physics.world.bodies.len(),
       stars: this.stars.total,
-      fps: (1 / this.frameDt).toFixed(0),
+      quality: this.qualityLabel(),
     });
   }
 }

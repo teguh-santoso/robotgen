@@ -197,17 +197,19 @@ body {
   white-space: nowrap;
 }
 
-.hud-fps {
+.hud-stats {
   pointer-events: none;
   position: absolute;
   left: 20px;
   bottom: 20px;
-  padding: 6px 14px;
+  padding: 7px 14px;
   border-radius: 12px;
-  background: rgba(20, 48, 74, 0.6);
+  background: rgba(20, 48, 74, 0.66);
   color: #b7ffb7;
-  font-family: ui-monospace, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .hud-hint {

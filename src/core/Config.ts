@@ -87,19 +87,20 @@ export const KID = {
   safeSpotInterval: 1.0,
 };
 
-export const QUALITY = {
-  maxPixelRatio: 1.5,
-  shadowMapSize: 1024,
-  degradeFpsThreshold: 45,
-  degradeSampleFrames: 180,
-  upgradeFpsThreshold: 58,
-  upgradeSampleFrames: 600,
-} as const;
-
 export const AUDIO = {
   masterVolume: 0.6,
   rumbleEnabledByDefault: true,
 } as const;
+
+/** Seconds between performance samples in the quality auto-tuner. */
+export const QUALITY_SAMPLE_WINDOW = 1.0;
+export const QUALITY_DOWNGRADE_FPS = 40;
+export const QUALITY_UPGRADE_FPS = 57;
+/** Consecutive slow windows before dropping a tier. Kept low: the first two
+ *  seconds should not be unplayable on a weak machine. */
+export const QUALITY_DOWNGRADE_WINDOWS = 2;
+/** Consecutive fast windows before climbing a tier. Deliberately cautious. */
+export const QUALITY_UPGRADE_WINDOWS = 6;
 
 export const DEBUG =
   typeof location !== 'undefined' && new URLSearchParams(location.search).has('debug');
